@@ -138,10 +138,11 @@ export async function captureHomepage(db:DbRunner,tenant:string,request:Request,
     fields.push({blockId:'$meta',path:['title'],text:result.page.title,label:'Page title'});
     if(result.page.description)fields.push({blockId:'$meta',path:['description'],text:result.page.description,label:'Page description'});
     // Hash the identity→text pairs in canonical identity order: rendered row order must not invalidate a release.
-    const sourceHash=await publicationHash(fields.map(field=>[stableIdentity(field),field.text] as const).sort((a,b)=>JSON.stringify(a[0])<JSON.stringify(b[0])?-1:JSON.stringify(a[0])>JSON.stringify(b[0])?1:0));
+    const sorted=fields.map(field=>{const identity=stableIdentity(field);return {key:JSON.stringify(identity),pair:[identity,field.text]};}).sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
+    const sourceHash=await publicationHash(sorted.map(item=>item.pair));
     return {active,result,layout,fields,sourceHash,pageId:target.pageId,path,templateListing:!!listing};
 }
-async function session(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,target:string,liveQuery?:PublishedLiveQuery,path:string='/',additionalRecords:DisplayField[]=[],batchReview=false){
+async function session(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,target:string,liveQuery?:PublishedLiveQuery,path:string='/',additionalRecords:DisplayField[]=[],batchReview=false,requested?:Set<string>){
     locale.parse(target);const config=(await new TranslationGenerationStore(db,tenant).get()).configuration;
     if(!config||!config.targetLocales.includes(target))throw Error('configured_locale_required');
     const storage=await configuredTranslationStorage(host,db,tenant),identity=await configuredTranslationStorageIdentity(host,db,tenant);
@@ -156,7 +157,10 @@ async function session(host:TranslationBatchHost,db:DbRunner,tenant:string,reque
     const sourceFields=capture.fields.concat(await supplementTemplateRecords(db,tenant,request,capture));
     for(const field of additionalRecords){if(!field.record)throw Error('record_identity_required');const existing=sourceFields.find(candidate=>JSON.stringify(stableIdentity(candidate))===JSON.stringify(stableIdentity(field)));if(existing){if(existing.text!==field.text)throw Error('source_changed');}else sourceFields.push(field);}
     if(sourceFields.length>500)throw Error('locale_surface_limit');
-    const fields=await mapLimit(sourceFields,async field=>{
+    // A save must still verify the full page source hash, but only its submitted fields need
+    // storage identities and fingerprints. Keep the same display identity and ordering.
+    const identified=await mapLimit(sourceFields,async field=>({field,id:field.menu?await publicationHash(['app-menus',field.menu.menuId,...field.menu.path]):await publicationHash([capture.path,field.blockId,field.versionId??'default',field.path])}));
+    const fields=await mapLimit(identified.filter(item=>!requested||requested.has(item.id)),async ({field,id})=>{
         // A stamped projected row names its source record column; identity and context follow the
         // column so one unit serves every surface rendering the same record field.
         const fieldKey=field.fieldKey??field.path.at(-1)??'';
@@ -178,7 +182,7 @@ async function session(host:TranslationBatchHost,db:DbRunner,tenant:string,reque
             ?{version:1,role:'record-field',resourceLabel:('Record '+field.record.collection+' / '+fieldKey).slice(0,200)}
             :{version:1,role:node?.type??'page-meta',resourceLabel:('Page '+(page?.name??capture.path)+' / '+field.path.at(-1)).slice(0,200)};
         const unitId=await translationUnitId(storage.scope,unit.resource),fingerprint=await messageSourceFingerprint(unit),contextFingerprint=await translationContextFingerprint(context);
-        return {...field,unit,context,unitId,fingerprint,contextFingerprint,id:field.menu?await publicationHash(['app-menus',field.menu.menuId,...field.menu.path]):await publicationHash([capture.path,field.blockId,field.versionId??'default',field.path])};
+        return {...field,unit,context,unitId,fingerprint,contextFingerprint,id};
     });
     return {...storage,capture,config,configHash,token,fields,locale:target,path};
 }
@@ -231,9 +235,10 @@ export async function reviewHomepage(host:TranslationBatchHost,db:DbRunner,tenan
     return translationHomepageReviewSchema.parse({locale:target,sourceLocale:s.config.sourceLocale,token:s.token,siteHash:s.capture.active.pointer.hash,fields,complete:fields.every(f=>f.state==='draft'),active:await readHomepagePointer(db,tenant,target,s.path),path:s.path});
 }
 export async function saveHomepageTranslations(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,input:unknown,liveQuery?:PublishedLiveQuery){
-    const body=translationHomepageSaveSchema.parse(input),path=body.path??'/';let s:Session;try{s=await session(host,db,tenant,request,body.locale,liveQuery,path);}catch{throw Error('homepage_review_unavailable');}
+    const body=translationHomepageSaveSchema.parse(input),path=body.path??'/';let s:Session;try{s=await session(host,db,tenant,request,body.locale,liveQuery,path,[],true,new Set(body.entries.map(e=>e.id)));}catch{throw Error('homepage_review_unavailable');}
     if(body.token!==s.token)throw Error('source_changed');
-    const pending=await mapLimit(body.entries,async e=>{const field=s.fields.find(f=>f.id===e.id);if(!field)throw Error('unknown_field');const prior=await readField(s,field);if(prior.value.token!==e.token)throw Error('revision_changed');return{e,field,display:translationDisplayText(field.text,e.text),...prior};});
+    const current=new Map((await readFields(s)).map(item=>[item.f.id,item]));
+    const pending=await mapLimit(body.entries,async e=>{const prior=current.get(e.id);if(!prior)throw Error('unknown_field');const field=prior.f;if(prior.value.token!==e.token)throw Error('revision_changed');return{e,field,display:translationDisplayText(field.text,e.text),...prior};});
     await writeHomepageDrafts(s,pending);
     const latest=await captureHomepage(db,tenant,request,liveQuery,path);if(latest.sourceHash!==s.capture.sourceHash||latest.active.pointer.hash!==s.capture.active.pointer.hash)throw Error('source_changed');
     return {saved:pending.length};

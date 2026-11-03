@@ -567,3 +567,4 @@ if (foundProhibited.length > 0) {
 }
 // Native Booking acceptance: manual languages and approved article-only preparation.
 // Acceptance fixture: build the page translation batch reader.
+// Acceptance fixture: build verified manifest reuse and scoped draft edits.

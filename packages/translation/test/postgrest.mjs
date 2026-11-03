@@ -72,6 +72,12 @@ try {
     assert.deepEqual(await batched.readMany({...scope,projectId:'other'},[f.source.unitId],'ar'),[{version:0,source:null,head:null}]);
     await assert.rejects(batched.readMany(scope,Array.from({length:501},()=>f.source.unitId),'ar'));
     await assert.rejects(batched.readMany(scope,[f.source.unitId,f.source.unitId],'ar'));
+    const moreIds=[f.source.unitId,...Array.from({length:66},(_,i)=>i.toString(16).padStart(64,'0'))];
+    const expected=await batched.readMany(scope,moreIds,'ar');
+    assert.deepEqual(await f.store.readMany(scope,moreIds,'ar'),expected);
+    assert.deepEqual(await f.store.readMany({...scope,tenantId:'foreign'},[f.source.unitId],'ar'),[{version:0,source:null,head:null}]);
+    const revisionKeys=[{unitId:f.source.unitId,revisionId:'revision'},{unitId:f.source.unitId,revisionId:'missing'}];
+    assert.deepEqual(await f.store.readRevisions(scope,revisionKeys,'ar'),await batched.readRevisions(scope,revisionKeys,'ar'));
     const wrongBatch=new PostgrestTranslationJobPersistence({call:async()=>[{unitId:second.unitId,snapshot:await f.store.read(scope,f.source.unitId,'ar')}]});
     await assert.rejects(wrongBatch.readMany(scope,[f.source.unitId],'ar'),/key_mismatch/);
     const foreignBatch=new PostgrestTranslationJobPersistence({call:async()=>[{unitId:f.source.unitId,snapshot:{version:1,source:{...(await f.store.read(scope,f.source.unitId)).source,unit:{...unit,scope:{...scope,tenantId:'foreign'}}},head:null}}]});

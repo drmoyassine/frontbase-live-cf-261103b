@@ -40,8 +40,7 @@ it('lists published languages and prepared versions with guarded deactivation an
  const versions={version:1,locale:'ar',path:'/',items:[{hash:'f'.repeat(64),reviewedAt:'2026-10-20T00:00:00.000Z',units:5,perUnit:false},{hash:'e'.repeat(64),reviewedAt:'2026-10-19T00:00:00.000Z',units:4,perUnit:true}]};
  const fetcher=vi.fn(async(url:string,options?:RequestInit)=>{
   if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});
-  if(url.includes('/locales/'))return Response.json(locales);
-  if(url.includes('/versions/'))return Response.json(versions);
+  if(url.includes('/history/'))return Response.json({published:locales,versions});
   if(options?.method==='POST'&&url.endsWith('/deactivate/'))return Response.json({deactivated:true});
   if(options?.method==='POST'&&url.endsWith('/publish/'))return Response.json({hash:'e'.repeat(64),generation:3});
   return Response.json(review);});vi.stubGlobal('fetch',fetcher);
@@ -59,7 +58,7 @@ it('lists published languages and prepared versions with guarded deactivation an
 it('flags unreadable publications as unavailable without deactivation while healthy rows stay actionable',async()=>{
  const review={...base,fields:[{...field,translation:'استكشاف المؤسسات',state:'draft'}],complete:true};
  const locales={version:1,total:2,locales:[{locale:'ar',path:'/',hash:'f'.repeat(64),generation:2,reviewedAt:'2026-10-20T00:00:00.000Z',perUnit:false,available:true},{locale:'fr',path:null,hash:null,generation:null,reviewedAt:null,perUnit:false,available:false}]};
- const fetcher=vi.fn(async(url:string)=>{if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});if(url.includes('/locales/'))return Response.json(locales);if(url.includes('/versions/'))return Response.json({version:1,items:[]});return Response.json(review);});vi.stubGlobal('fetch',fetcher);
+ const fetcher=vi.fn(async(url:string)=>{if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});if(url.includes('/history/'))return Response.json({published:locales,versions:{items:[]}});return Response.json(review);});vi.stubGlobal('fetch',fetcher);
  render(<HomepageTranslationWorkspace onClose={()=>{}}/>);
  await screen.findByText('1 / 1 fields translated · Not published');fireEvent.click(screen.getByRole('button',{name:'Publication history'}));await screen.findByText('ar · / · generation 2');
  expect(screen.getByText(/fr · — · release unavailable/)).toBeTruthy();
@@ -69,18 +68,18 @@ it('flags unreadable publications as unavailable without deactivation while heal
 it('paginates published languages and fetches the next offset',async()=>{
  const review={...base,fields:[{...field,translation:'استكشاف المؤسسات',state:'draft'}],complete:true};
  const locales={version:1,total:60,locales:Array.from({length:50},(_,i)=>({locale:'l'+i,path:'/',hash:'f'.repeat(64),generation:i+1,reviewedAt:'2026-10-20T00:00:00.000Z',perUnit:false,available:true}))};
- const fetcher=vi.fn(async(url:string)=>{if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});if(url.includes('/locales/'))return Response.json(locales);if(url.includes('/versions/'))return Response.json({version:1,items:[]});return Response.json(review);});vi.stubGlobal('fetch',fetcher);
+ const fetcher=vi.fn(async(url:string)=>{if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});if(url.includes('/history/'))return Response.json({published:locales,versions:{items:[]}});return Response.json(review);});vi.stubGlobal('fetch',fetcher);
  render(<HomepageTranslationWorkspace onClose={()=>{}}/>);
  await screen.findByText('1 / 1 fields translated · Not published');fireEvent.click(screen.getByRole('button',{name:'Publication history'}));await screen.findByText('Showing 1–50 of 60');
  expect(screen.getByRole('button',{name:'Previous'})).toBeDisabled();
  fireEvent.click(screen.getByRole('button',{name:'Next'}));
  await screen.findByText('Showing 51–60 of 60');
- expect(fetcher.mock.calls.some(([url])=>url.includes('/locales/?limit=50&offset=50'))).toBe(true);
+ expect(fetcher.mock.calls.some(([url])=>url.includes('/history/')&&url.includes('limit=50&offset=50'))).toBe(true);
  expect(screen.getByRole('button',{name:'Next'})).toBeDisabled();
 });
 it('never blanks the published panel: a locales failure renders the unavailable alert instead of the empty state',async()=>{
  const review={...base,fields:[{...field,translation:'استكشاف المؤسسات',state:'draft'}],complete:true};
- const fetcher=vi.fn(async(url:string)=>{if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});if(url.includes('/locales/'))return Response.json({detail:'Published languages are unavailable.'},{status:422});if(url.includes('/versions/'))return Response.json({version:1,items:[]});return Response.json(review);});vi.stubGlobal('fetch',fetcher);
+ const fetcher=vi.fn(async(url:string)=>{if(url.includes('/workspace/'))return Response.json({locales:['ar'],review});if(url.includes('/history/'))return Response.json({detail:'Published languages are unavailable.'},{status:422});if(url.includes('/versions/'))return Response.json({version:1,items:[]});return Response.json(review);});vi.stubGlobal('fetch',fetcher);
  render(<HomepageTranslationWorkspace onClose={()=>{}}/>);
  await screen.findByText('1 / 1 fields translated · Not published');fireEvent.click(screen.getByRole('button',{name:'Publication history'}));await screen.findByText('Published languages are unavailable. Reload to retry.');
  expect(screen.queryByText('Nothing published yet for this site.')).toBeNull();
