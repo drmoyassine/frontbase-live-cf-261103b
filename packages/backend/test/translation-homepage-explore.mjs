@@ -144,7 +144,7 @@ try {
     assert.equal((await html('/ar/?type=program')).status, 400);
     // Record-detail paths stay source content under the localized prefix.
     const detail = await html('/ar/inst-1/'); assert.equal(detail.status, 200);
-    assert.ok(detail.text.includes('Institution 01'), 'record-detail pages are not translated');
+    assert.ok(detail.text.includes('Institution 01'), 'an unpublished record-detail translation falls back to source');
     // Release identity: supplement entries are real shared record units.
     const release = await readHomepageRelease(f.db, tenant, (await call('locales/')).locales.find(item => item.path === '/explore/').hash);
     const scope = { tenantId: tenant, projectId: release.project };
@@ -245,5 +245,5 @@ try {
     assert.equal(dirLang(datedSource.text), 'en/ltr', 'source serves keep the site direction stamp');
 
     auth = false; await call('review/?locale=ar&path=/explore/', undefined, 401); auth = true; role = 'viewer'; await call('review/?locale=ar&path=/explore/', undefined, 403); role = 'owner';
-    console.log('translation-homepage explore PASS: template listing pages, per-unit-only releases, browsing chrome surfaces, paged record supplement, parameterized joins, per-unit fallback, record-detail refusal, standard-conversion fetch agreement, locale-following dates and direction');
+    console.log('translation-homepage explore PASS: template listing pages, per-unit-only releases, browsing chrome surfaces, paged record supplement, parameterized joins, per-unit fallback, record-detail review and unknown-path refusal, standard-conversion fetch agreement, locale-following dates and direction');
 } finally { f.close(); }

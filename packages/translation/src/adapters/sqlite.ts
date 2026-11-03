@@ -1,6 +1,6 @@
 import { translationRevisionSchema, EMPTY_TRANSLATION_CONTEXT_FINGERPRINT, type LocalizationScope } from '../contracts.js';
 import { parsePersistenceChange, parsePersistenceKey, sourceRecordSchema, storedRevisionSchema,
-    type TranslationPersistence, type TranslationSnapshot, type PersistenceChange, type StoredRevision, type CasResult, type SourceRecord, type JobCommitFence } from '../revisions.js';
+    type TranslationPersistence, type TranslationBatchReader, type TranslationSnapshot, type PersistenceChange, type StoredRevision, type CasResult, type SourceRecord, type JobCommitFence } from '../revisions.js';
 
 type Value = string | number | null;
 /** Inject a dedicated synchronous SQLite connection. No Node/D1/provider SDK dependency is imported. */
@@ -12,7 +12,7 @@ type Row = Record<string, unknown>;
 const row = (value: unknown): Row | undefined => value as Row | undefined;
 
 /** Persistent reference adapter. Not a compatibility claim for async D1/Turso or PostgreSQL transports. */
-export class SqliteTranslationPersistence implements TranslationPersistence {
+export class SqliteTranslationPersistence implements TranslationPersistence, TranslationBatchReader {
     protected readonly prefix: string;
     constructor(protected readonly connection: SqliteConnection, options: { tablePrefix?: string } = {}) {
         this.prefix = options.tablePrefix ?? 'fb_i18n_';

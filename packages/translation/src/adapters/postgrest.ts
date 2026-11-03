@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { localizationScopeSchema, translationRevisionSchema, type LocalizationScope } from '../contracts.js';
 import { parsePersistenceKey, parsePersistenceChange, translationSnapshotSchema, sourceRecordSchema, storedRevisionSchema,
-    type TranslationSnapshot, type SourceRecord, type StoredRevision, type PersistenceChange, type CasResult } from '../revisions.js';
+    type TranslationBatchReader, type TranslationSnapshot, type SourceRecord, type StoredRevision, type PersistenceChange, type CasResult } from '../revisions.js';
 import { translationJobSchema, translationJobIntentSchema, jobErrorSchema,
     type TranslationJobPersistence, type TranslationJob, type TranslationJobIntent, type EnqueueResult, type JobError } from '../jobs.js';
 
@@ -20,7 +20,7 @@ function owner(actual: LocalizationScope, expected: LocalizationScope): void {
 }
 
 /** Each mutation is one atomic domain RPC. SQL installation is an explicit administrative operation. */
-export class PostgrestTranslationJobPersistence implements TranslationJobPersistence {
+export class PostgrestTranslationJobPersistence implements TranslationJobPersistence, TranslationBatchReader {
     constructor(private readonly transport: TranslationRpcTransport) {}
     private async request(operation: TranslationRpcOperation, scope: LocalizationScope, input: Record<string, unknown>): Promise<unknown> {
         try { return await this.transport.call(operation, localizationScopeSchema.parse(scope), input); }
