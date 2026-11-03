@@ -565,3 +565,4 @@ if (foundProhibited.length > 0) {
 } else {
     console.log(`✅ Client bundle verification: NO prohibited symbols found`);
 }
+// Native Booking acceptance: manual languages and approved article-only preparation.
