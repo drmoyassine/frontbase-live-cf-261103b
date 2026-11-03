@@ -263,5 +263,5 @@ export async function completeCloudBootstrap(env:any,target:'cloudflare'|'vercel
  const journal=target==='cloudflare'&&!env.FRONTBASE_BOOTSTRAP_STORE?sqlBootstrapJournal(d1RunnerFromBinding(env.FRONTBASE_SETUP_JOURNAL),context):createCloudBootstrap({...env,FRONTBASE_BOOTSTRAP:'1'},target,transport,{operationId:env.FRONTBASE_BOOTSTRAP_OPERATION,fingerprint:env.FRONTBASE_BOOTSTRAP_FINGERPRINT}).journal;
  const record=await journal.read(context);if(!record||record.phase==='active')return;
  const reconciled=await reconcileBootstrap(context,journal,{preflight:async()=>{refuse()},apply:async()=>{refuse()},inspect:async()=>({operationId:env.FRONTBASE_BOOTSTRAP_OPERATION,fingerprint:env.FRONTBASE_BOOTSTRAP_FINGERPRINT,healthy:(await health()).ok,bootstrapDisabled:true})});
- if(reconciled.phase!=='active')throw Error('bootstrap_receipt_completion_pending');
+ return reconciled.phase==='active';
 }

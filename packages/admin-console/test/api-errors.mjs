@@ -26,9 +26,10 @@ try{
  const realTimeoutSignal = AbortSignal.timeout;
  try {
   const controller = new AbortController();
-  AbortSignal.timeout = ms => { assert.ok(ms > 0 && ms <= 10000); return controller.signal; };
+  AbortSignal.timeout = ms => { assert.ok(ms > 0 && ms <= 10000); return calls === 0 ? controller.signal : new AbortController().signal; };
   calls=0;
   globalThis.fetch=async(_url,init)=>{
+   assert.equal(init.signal.aborted,false);
    if(++calls===2)return Response.json({ok:true});
    return new Promise((_,reject)=>{
     init.signal.addEventListener('abort',()=>reject(init.signal.reason),{once:true});

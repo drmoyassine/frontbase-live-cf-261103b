@@ -2,7 +2,7 @@
  * First-run setup client. `/api/console/setup/*` is the only framework-owned
  * console surface retained after CF-22; the product console uses `/api/*`.
  *
- * RULE 1: this is browser code â€” it NEVER imports @frontbase/edge-infra or
+ * RULE 1: this is browser code — it NEVER imports @frontbase/edge-infra or
  * @frontbase/backend server modules. fetch is the only server touchpoint.
  */
 
