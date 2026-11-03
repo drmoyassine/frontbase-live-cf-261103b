@@ -1,3 +1,4 @@
+import {TranslationGenerationStore} from '../translation-generation.js';
 import {z} from 'zod';
 import type {Hono} from 'hono';
 import type {DbRunner} from '@frontbase/edge-infra';
@@ -9,6 +10,7 @@ import {addHomepageLanguageLinks} from '../translation-homepage-serving.js';
 import {createEngine,directProvider,type PageLayoutData} from '@frontbase/edge-core';
 import {localeDirection} from '@frontbase/edge-core/localization';
 
+function reviewCode(error:unknown){const codes=new Set(['translation_storage_unavailable','homepage_source_unavailable','translation_read_unavailable','localized_interactive_list_not_supported','localized_live_table_not_supported']);const code=error instanceof Error&&codes.has(error.message)?error.message:'unavailable';return code;}
 async function body(request:Request){const reader=request.body?.getReader();if(!reader)throw Error();let size=0,text='';const decoder=new TextDecoder();while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>400000){await reader.cancel();throw Error();}text+=decoder.decode(chunk.value,{stream:true});}return JSON.parse(text+decoder.decode());}
 const pagePath=z.string().regex(/^\/(?:[A-Za-z0-9._~!$&'()*+,;=@%-]+\/)*$/).max(160);
 const policySchema=z.object({missing:z.enum(['block','source-fallback']),outdated:z.enum(['block','source-fallback'])}).strict();
@@ -16,7 +18,17 @@ const policySchema=z.object({missing:z.enum(['block','source-fallback']),outdate
 export function registerTranslationHomepageRoutes(app:Hono<{Variables:ConsoleAuthVars}>,db:DbRunner,host:TranslationBatchHost,now:()=>string){
     const root='/api/project/translation-batches/homepage/';
     const live=(url:string)=>publishedLiveQuery(request=>app.fetch(new Request(new URL('/api/data/execute',url),request)));
-    app.get(root+'review/',async c=>{try{const path=pagePath.optional().parse(c.req.query('path')??'/');return c.json(await reviewHomepage(host,db,c.get('tenant'),c.req.raw,c.req.query('locale')??'',live(c.req.url),path));}catch(error){const codes=new Set(['translation_storage_unavailable','homepage_source_unavailable','translation_read_unavailable','localized_interactive_list_not_supported','localized_live_table_not_supported']);const code=error instanceof Error&&codes.has(error.message)?error.message:'unavailable';return c.json({detail:'Published homepage translations are unavailable. Check the active reviewed homepage and translation storage.',code},422);}});
+    // One authenticated initial read. Lists and history have their own on-demand routes.
+    app.get(root+'workspace/',async c=>{
+        const tenant=c.get('tenant');
+        try {
+            const locales=(await new TranslationGenerationStore(db,tenant).get()).configuration?.targetLocales??[];
+            if(!locales.length)return c.json({locales,review:null,code:'configured_locale_required'});
+            try{return c.json({locales,review:await reviewHomepage(host,db,tenant,c.req.raw,locales[0]!,live(c.req.url))});}
+            catch(error){return c.json({locales,review:null,code:reviewCode(error)});}
+        }catch{return c.json({code:'unavailable'},422);}
+    });
+    app.get(root+'review/',async c=>{try{const path=pagePath.optional().parse(c.req.query('path')??'/');return c.json(await reviewHomepage(host,db,c.get('tenant'),c.req.raw,c.req.query('locale')??'',live(c.req.url),path));}catch(error){const code=reviewCode(error);return c.json({detail:'Published homepage translations are unavailable. Check the active reviewed homepage and translation storage.',code},422);}});
     app.post(root+'save/',async c=>{try{return c.json(await saveHomepageTranslations(host,db,c.get('tenant'),c.req.raw,await body(c.req.raw),live(c.req.url)));}catch(error){const codes=new Set(['homepage_review_unavailable','source_changed','unknown_field','revision_changed','source_sync_unavailable','source_sync_conflict','translation_write_unavailable','translation_write_refused','translation_text_invalid']);const code=error instanceof Error&&codes.has(error.message)?error.message:'unavailable';return c.json({detail:'Some drafts may have saved. Reload the review before retrying; source, settings or a translation may have changed.',code},409);}});
     app.post(root+'prepare/',async c=>{try{const input=z.object({locale:z.string(),token:z.string(),approveTranslations:z.literal(true),path:pagePath.optional(),policy:policySchema.optional()}).strict().parse(await body(c.req.raw));return c.json(await prepareHomepageLocale(host,db,c.get('tenant'),c.req.raw,input.locale,input.token,String(c.get('principal').user!.id),now(),live(c.req.url),input.path??'/',input.policy));}catch(error){const codes=new Set(['template_release_per_unit_required','live_release_per_unit_required']);return c.json({detail:'Complete and review every homepage field before preparing this language. Reload after source or translation changes.',...(error instanceof Error&&codes.has(error.message)?{code:error.message}:{})},409);}});
     app.post(root+'publish/',async c=>{try{const input=z.object({hash:z.string().regex(/^[a-f0-9]{64}$/),expected:z.object({hash:z.string(),generation:z.number().int()}).strict().nullable(),approveTranslations:z.literal(true)}).strict().parse(await body(c.req.raw));return c.json(await activateHomepageLocale(host,db,c.get('tenant'),c.req.raw,input.hash,input.expected,now(),live(c.req.url)));}catch{return c.json({detail:'The prepared language changed or publication conflicted. Reload and prepare again.'},409);}});

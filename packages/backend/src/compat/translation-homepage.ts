@@ -141,12 +141,12 @@ export async function captureHomepage(db:DbRunner,tenant:string,request:Request,
     const sourceHash=await publicationHash(fields.map(field=>[stableIdentity(field),field.text] as const).sort((a,b)=>JSON.stringify(a[0])<JSON.stringify(b[0])?-1:JSON.stringify(a[0])>JSON.stringify(b[0])?1:0));
     return {active,result,layout,fields,sourceHash,pageId:target.pageId,path,templateListing:!!listing};
 }
-async function session(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,target:string,liveQuery?:PublishedLiveQuery,path:string='/',additionalRecords:DisplayField[]=[]){
+async function session(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,target:string,liveQuery?:PublishedLiveQuery,path:string='/',additionalRecords:DisplayField[]=[],batchReview=false){
     locale.parse(target);const config=(await new TranslationGenerationStore(db,tenant).get()).configuration;
     if(!config||!config.targetLocales.includes(target))throw Error('configured_locale_required');
     const storage=await configuredTranslationStorage(host,db,tenant),identity=await configuredTranslationStorageIdentity(host,db,tenant);
     if(identity.configurationRevision!==storage.configurationRevision||JSON.stringify(identity.destination)!==JSON.stringify(storage.destination))throw Error();
-    await storage.persistence.initialize().catch(()=>{throw Error('translation_storage_unavailable');});
+    if(!batchReview)await storage.persistence.initialize().catch(()=>{throw Error('translation_storage_unavailable');});
     // Precise translation-surface refusals (e.g. an interactive live list) pass through under
     // their own code; everything else stays an opaque source-unavailable so internals never
     // leak through the review surface.
@@ -216,13 +216,18 @@ async function supplementTemplateRecords(db:DbRunner,tenant:string,request:Reque
 }
 function findNode(layout:PageLayoutData,id:string){const walk=(nodes:PageLayoutData['content']):PageLayoutData['content'][number]|undefined=>{for(const node of nodes){if(node.id===id)return node;const found=walk(node.children??[]);if(found)return found;for(const version of node.versions??[]){const inner=walk((version.overrides.children??[])as PageLayoutData['content']);if(inner)return inner;}}return undefined;};return walk(layout.content);}
 type Session=Awaited<ReturnType<typeof session>>;
-async function readField(s:Session,f:Session['fields'][number]){
-    const snapshot=await s.persistence.read(s.scope,f.unitId,s.locale),head=snapshot.head;
+async function readField(s:Session,f:Session['fields'][number],snapshot=undefined as Awaited<ReturnType<Session['persistence']['read']>>|undefined){
+    snapshot??=await s.persistence.read(s.scope,f.unitId,s.locale);const head=snapshot.head;
     const current=!!head&&snapshot.source?.fingerprint===f.fingerprint&&snapshot.source.contextFingerprint===f.contextFingerprint&&head.sourceVersion===snapshot.source.sourceVersion&&head.sourceFingerprint===f.fingerprint&&head.contextFingerprint===f.contextFingerprint;
     return {snapshot,value:{id:f.id,label:f.label,source:f.text,translation:current?head!.text:null,state:head?current?'draft' as const:'outdated' as const:'missing' as const,token:await publicationHash({token:s.token,id:f.id,snapshot})}};
 }
+async function readFields(s:Session){
+    const ids=[...new Set(s.fields.map(field=>field.unitId))],snapshots=new Map<string,Awaited<ReturnType<Session['persistence']['read']>>>();
+    if(ids.length){const rows=await s.persistence.readMany(s.scope,ids,s.locale);ids.forEach((id,index)=>snapshots.set(id,rows[index]!));}
+    return mapLimit(s.fields,async f=>({f,...await readField(s,f,snapshots.get(f.unitId))}));
+}
 export async function reviewHomepage(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,target:string,liveQuery?:PublishedLiveQuery,path:string='/'){
-    const s=await session(host,db,tenant,request,target,liveQuery,path),fields=await mapLimit(s.fields,async f=>(await readField(s,f).catch(()=>{throw Error('translation_read_unavailable');})).value);
+    const s=await session(host,db,tenant,request,target,liveQuery,path,[],true),fields=(await readFields(s).catch(()=>{throw Error('translation_read_unavailable');})).map(item=>item.value);
     return translationHomepageReviewSchema.parse({locale:target,sourceLocale:s.config.sourceLocale,token:s.token,siteHash:s.capture.active.pointer.hash,fields,complete:fields.every(f=>f.state==='draft'),active:await readHomepagePointer(db,tenant,target,s.path),path:s.path});
 }
 export async function saveHomepageTranslations(host:TranslationBatchHost,db:DbRunner,tenant:string,request:Request,input:unknown,liveQuery?:PublishedLiveQuery){
@@ -296,7 +301,7 @@ export async function prepareHomepageLocale(host:TranslationBatchHost,db:DbRunne
     // would go stale (and 503 the localized page) on the first source-record change. Only the
     // per-unit fresh() join can serve them honestly — same rule as template listings.
     if(!s.capture.templateListing&&liveViewBindings(s.capture.layout).length>0&&(policy.missing!=='source-fallback'||policy.outdated!=='source-fallback'))throw Error('live_release_per_unit_required');
-    const read=await mapLimit(s.fields,async f=>({f,...await readField(s,f).catch(()=>{throw Error('coverage_read_failed');})}));
+    const read=await readFields(s).catch(()=>{throw Error('coverage_read_failed');});
     for(const item of read){
         if(item.value.state==='draft')continue;
         if(item.value.state==='missing'&&policy.missing==='source-fallback')continue;
@@ -318,7 +323,8 @@ export async function activateHomepageLocale(host:TranslationBatchHost,db:DbRunn
     // Per-unit releases serve a fresh per-unit join, so site/source drift between prepare and
     // publish does not block (re-)activation; strict releases keep the whole-source gate.
     if(release.policy?.outdated!=='source-fallback'&&(s.capture.active.pointer.hash!==release.siteHash||s.capture.sourceHash!==release.sourceHash))throw Error('prepared_locale_changed');
-    await mapLimit(release.catalog,async field=>{const revision=await s.persistence.readRevision(s.scope,field.unitId,release.locale,field.revisionId);if(!revision||revision.text!==field.text||revision.sourceFingerprint!==field.sourceFingerprint)throw Error('revision_unavailable');});
+    if(release.catalog.length){const batch=release.catalog,revisions=await s.persistence.readRevisions(s.scope,batch.map(field=>({unitId:field.unitId,revisionId:field.revisionId})),release.locale);
+        batch.forEach((field,index)=>{const revision=revisions[index];if(!revision||revision.text!==field.text||revision.sourceFingerprint!==field.sourceFingerprint)throw Error('revision_unavailable');});}
     const prior=await raw(db,tenant,await activeKey(release.locale,release.path)),current=prior?pointerSchema.parse(JSON.parse(prior)):null;
     if(JSON.stringify(current)!==JSON.stringify(pointerSchema.nullable().parse(expected)))throw Error('activation_conflict');
     const next={hash:releaseHash,generation:(current?.generation??0)+1},value=JSON.stringify(next);
@@ -385,7 +391,7 @@ export async function publishedTranslationPages(db:DbRunner,tenant:string){
     // their releases are per-unit only, joining every parameterized rendering in memory.
     const listings=active.artifact.templates.filter(template=>['directory','article-index'].includes(template.role))
         .map(template=>({path:template.role==='directory'?routes.directory:routes.blog,title:template.title.slice(0,200)}));
-    const detailPages=active.artifact.index.filter(entry=>['institutions','programs'].includes(entry.collection)&&entry.originalPath).slice(0,1000).map(entry=>({path:entry.originalPath!,title:entry.title.slice(0,200)}));
+    const detailPages=active.artifact.index.filter(entry=>['institutions','programs','articles','pages'].includes(entry.collection)&&entry.originalPath).slice(0,1000).map(entry=>({path:entry.originalPath!,title:entry.title.slice(0,200)}));
     const seen=new Set<string>();
     const pages=[...(active.artifact.staticPages??[]).slice(0,64).map(page=>({path:page.originalPath,title:page.title.slice(0,200)})),...listings,...detailPages]
         .filter(page=>(page.path==='/'||/^\/[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=@%-]+)*\/$/.test(page.path))&&!seen.has(page.path)&&seen.add(page.path));

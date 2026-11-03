@@ -27,6 +27,9 @@ export type CasResult = 'committed' | 'conflict' | 'revision-id-conflict' | 'job
 /** Trusted low-level adapter port, never a visitor API. CAS must atomically append history and advance the head/version. */
 export interface TranslationPersistence {
     read(scope: LocalizationScope, unitId: string, locale?: string): Promise<TranslationSnapshot>;
+    /** One bounded, ordered snapshot per requested unit; missing units retain their position. */
+    readMany(scope: LocalizationScope, unitIds: string[], locale?: string): Promise<TranslationSnapshot[]>;
+    readRevisions(scope: LocalizationScope, keys: {unitId:string;revisionId:string}[], locale:string): Promise<(StoredRevision|null)[]>;
     readRevision(scope: LocalizationScope, unitId: string, locale: string, revisionId: string): Promise<StoredRevision | null>;
     /** Bounded newest-first history for one unit/locale in storage order (revisionId is not monotonic). */
     listRevisions(scope: LocalizationScope, unitId: string, locale: string, limit: number): Promise<StoredRevision[]>;

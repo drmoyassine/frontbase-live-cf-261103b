@@ -65,5 +65,18 @@ try {
     const error = new PostgrestTranslationJobPersistence({ async call() { throw Error('private connection details'); } });
     await assert.rejects(error.read(scope, f.source.unitId), e => e.message === 'translation_rpc_failed');
     assert.ok(calls.every(call => !('sql' in call.input)));
+    const {accountingTransports}=await import('./accounting-transports.mjs');
+    const batched=new PostgrestTranslationJobPersistence(accountingTransports(f.store).jobs);
+    assert.deepEqual(await batched.readMany(scope,[f.source.unitId,second.unitId],'ar'),await Promise.all([f.source.unitId,second.unitId].map(id=>store.read(scope,id,'ar'))));
+    assert.equal((await batched.readRevisions(scope,[{unitId:f.source.unitId,revisionId:'revision'}],'ar'))[0].text,'قدّم');
+    assert.deepEqual(await batched.readMany({...scope,projectId:'other'},[f.source.unitId],'ar'),[{version:0,source:null,head:null}]);
+    await assert.rejects(batched.readMany(scope,Array.from({length:501},()=>f.source.unitId),'ar'));
+    await assert.rejects(batched.readMany(scope,[f.source.unitId,f.source.unitId],'ar'));
+    const wrongBatch=new PostgrestTranslationJobPersistence({call:async()=>[{unitId:second.unitId,snapshot:await f.store.read(scope,f.source.unitId,'ar')}]});
+    await assert.rejects(wrongBatch.readMany(scope,[f.source.unitId],'ar'),/key_mismatch/);
+    const foreignBatch=new PostgrestTranslationJobPersistence({call:async()=>[{unitId:f.source.unitId,snapshot:{version:1,source:{...(await f.store.read(scope,f.source.unitId)).source,unit:{...unit,scope:{...scope,tenantId:'foreign'}}},head:null}}]});
+    await assert.rejects(foreignBatch.readMany(scope,[f.source.unitId],'ar'),/scope_mismatch/);
+    const wrongRevisionBatch=new PostgrestTranslationJobPersistence({call:async()=>[{unitId:f.source.unitId,revisionId:'revision',revision:{...await f.store.readRevision(scope,f.source.unitId,'ar','revision'),locale:'fr'}}]});
+    await assert.rejects(wrongRevisionBatch.readRevisions(scope,[{unitId:f.source.unitId,revisionId:'revision'}],'ar'),/key_mismatch/);
 } finally { f.close(); }
 console.log('translation PostgREST adapter: PASS (typed transport test double; live SQL proof is separate)');

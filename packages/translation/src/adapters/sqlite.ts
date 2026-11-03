@@ -71,6 +71,31 @@ export class SqliteTranslationPersistence implements TranslationPersistence {
             head: data.payload_json === null ? null : storedRevisionSchema.parse(JSON.parse(String(data.payload_json))) };
     }
 
+    async readMany(scopeInput:LocalizationScope, units:string[], localeInput?:string):Promise<TranslationSnapshot[]> {
+        if(!units.length||units.length>500||new Set(units).size!==units.length)throw Error('invalid_translation_batch');
+        const keys=units.map(unit=>parsePersistenceKey(scopeInput,unit,localeInput)),{scope,locale}=keys[0]!,p=this.prefix;
+        // json_each binds one parameter even for a full page; the ordinal preserves missing rows.
+        const data=row(this.connection.prepare(`SELECT json_group_array(json_object(
+            'version',version,'source_json',source_json,'source_version',source_version,'source_fingerprint',source_fingerprint,
+            'context_json',context_json,'context_fingerprint',context_fingerprint,'payload_json',payload_json)) AS items FROM (
+            SELECT u.*,r.payload_json FROM json_each(?) k
+            LEFT JOIN ${p}units u ON u.unit_id=k.value AND u.tenant_id=? AND u.project_id=?
+            LEFT JOIN ${p}heads h ON h.tenant_id=u.tenant_id AND h.project_id=u.project_id AND h.unit_id=u.unit_id AND h.locale=?
+            LEFT JOIN ${p}revisions r ON r.tenant_id=h.tenant_id AND r.project_id=h.project_id AND r.unit_id=h.unit_id AND r.locale=h.locale AND r.revision_id=h.revision_id
+            ORDER BY k.key)`).get(JSON.stringify(units),scope.tenantId,scope.projectId,locale??null));
+        return (JSON.parse(String(data?.items)) as Row[]).map(item=>item.version===null?{version:0,source:null,head:null}:
+            {version:Number(item.version),source:this.sourceFromRow(item),head:item.payload_json===null?null:storedRevisionSchema.parse(JSON.parse(String(item.payload_json)))});
+    }
+    async readRevisions(scopeInput:LocalizationScope,keys:{unitId:string;revisionId:string}[],localeInput:string):Promise<(StoredRevision|null)[]> {
+        if(!keys.length||keys.length>500)throw Error('invalid_translation_batch');
+        for(const key of keys){parsePersistenceKey(scopeInput,key.unitId,localeInput);translationRevisionSchema.shape.revisionId.parse(key.revisionId);}
+        const data=row(this.connection.prepare(`SELECT json_group_array(payload_json) AS items FROM (
+            SELECT r.payload_json FROM json_each(?) k LEFT JOIN ${this.prefix}revisions r
+            ON r.tenant_id=? AND r.project_id=? AND r.locale=? AND r.unit_id=json_extract(k.value,'$.unitId') AND r.revision_id=json_extract(k.value,'$.revisionId')
+            ORDER BY k.key)`).get(JSON.stringify(keys),scopeInput.tenantId,scopeInput.projectId,localeInput));
+        return (JSON.parse(String(data?.items)) as (string|null)[]).map(item=>item===null?null:storedRevisionSchema.parse(JSON.parse(item)));
+    }
+
     protected sourceFromRow(data: Row): SourceRecord {
         return sourceRecordSchema.parse({ unit: JSON.parse(String(data.source_json)), sourceVersion: Number(data.source_version), fingerprint: data.source_fingerprint,
             context: JSON.parse(String(data.context_json)), contextFingerprint: data.context_fingerprint });
