@@ -569,3 +569,4 @@ if (foundProhibited.length > 0) {
 // Acceptance fixture: build the page translation batch reader.
 // Acceptance fixture: build verified manifest reuse and scoped draft edits.
 // Acceptance fixture: build lean publication activation.
+// Acceptance fixture: validate localized public serving after install.
